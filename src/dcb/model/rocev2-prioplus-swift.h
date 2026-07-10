@@ -236,8 +236,9 @@ class RoCEv2PrioplusSwift : public RoCEv2CongestionOps
     uint32_t m_exceedLimit; //!< The limit of delay exceed the THigh
 
     // Variables for better threshold setting
-    QueueSize m_tChannelWidthBytes;    //!< The width of the channel
-    QueueSize m_tChannelIntervalBytes; //!< The interval of the channel
+    QueueSize m_tChannelWidthBytes;    //!< Thigh distance between adjacent priority channels
+    QueueSize m_tChannelIntervalBytes; //!< Deprecated: old gap between next Thigh and Tlow
+    double m_tChannelTargetWaterline;  //!< Relative Tlow position in the channel width
     uint32_t m_priorityNum;            //!< The number of priority in the network
     uint32_t m_priorityIndex;          //!< The index of the priority of this flow, lesser is higher
     void SetChannelWidth(StringValue width);

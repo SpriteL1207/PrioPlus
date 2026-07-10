@@ -26,6 +26,7 @@
 
 #include <boost/json.hpp>
 #include <cmath>
+#include <cstdint>
 #include <fstream>
 #include <iostream>
 
@@ -135,15 +136,21 @@ RoCEv2PrioplusSwift::GetTypeId()
                           MakeDoubleAccessor(&RoCEv2PrioplusSwift::m_delayErrorScale),
                           MakeDoubleChecker<double>())
             .AddAttribute("ChannelWidthBytes",
-                          "The width of a channel in Bytes",
+                          "The Thigh distance between two adjacent priority channels in Bytes",
                           StringValue("0KB"),
                           MakeStringAccessor(&RoCEv2PrioplusSwift::SetChannelWidth),
                           MakeStringChecker())
             .AddAttribute("ChannelIntervalBytes",
-                          "The interval of a channel in Bytes",
+                          "Deprecated: use ChannelTargetWaterline instead",
                           StringValue("0KB"),
                           MakeStringAccessor(&RoCEv2PrioplusSwift::SetChannelInterval),
                           MakeStringChecker())
+            .AddAttribute("ChannelTargetWaterline",
+                          "The relative Tlow position in the channel width, measured from the "
+                          "next lower priority's Thigh",
+                          DoubleValue(0.4),
+                          MakeDoubleAccessor(&RoCEv2PrioplusSwift::m_tChannelTargetWaterline),
+                          MakeDoubleChecker<double>(0.0, 1.0))
             .AddAttribute("PriorityNum",
                           "The number of priority in the network",
                           UintegerValue(8),
@@ -856,13 +863,25 @@ RoCEv2PrioplusSwift::SetChannelThres()
         // Do not set the channel threshold in this function
         return;
     }
-    // Calculate the tlow and thigh as channel's lower and upper bound
+
+    uint64_t channelWidth = m_tChannelWidthBytes.GetValue();
+    if (m_tChannelIntervalBytes.GetValue() != 0)
+    {
+        uint64_t legacyTargetToThighWidth = m_tChannelWidthBytes.GetValue();
+        uint64_t legacyNextThighToTargetWidth = m_tChannelIntervalBytes.GetValue();
+        channelWidth = legacyTargetToThighWidth + legacyNextThighToTargetWidth;
+        m_tChannelTargetWaterline =
+            static_cast<double>(legacyNextThighToTargetWidth) / channelWidth;
+    }
+
+    // ChannelWidthBytes is the Thigh distance between adjacent priorities. Tlow is placed at
+    // ChannelTargetWaterline of that distance above the next lower priority's Thigh.
+    uint64_t targetToThighWidth =
+        static_cast<uint64_t>(std::llround(channelWidth * (1.0 - m_tChannelTargetWaterline)));
     m_tLowThresholdInBytes =
-        QueueSize(BYTES,
-                  (m_tChannelWidthBytes.GetValue() + m_tChannelIntervalBytes.GetValue()) *
-                      (m_priorityNum - m_priorityIndex));
+        QueueSize(BYTES, channelWidth * (m_priorityNum - m_priorityIndex));
     m_tHighThresholdInBytes =
-        QueueSize(BYTES, m_tLowThresholdInBytes.GetValue() + m_tChannelWidthBytes.GetValue());
+        QueueSize(BYTES, m_tLowThresholdInBytes.GetValue() + targetToThighWidth);
 }
 
 void

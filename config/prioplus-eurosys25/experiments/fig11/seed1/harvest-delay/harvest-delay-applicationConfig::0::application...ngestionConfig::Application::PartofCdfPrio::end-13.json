@@ -139,8 +139,8 @@
                 "MaxMdf": 0.5,
                 "ForgetFactor": 1.0,
                 "ForgetCountEnabled": true,
-                "ChannelWidthBytes": "30KB",
-                "ChannelIntervalBytes": "20KB",
+                "ChannelWidthBytes": "50KB",
+                "ChannelTargetWaterline": 0.4,
                 "PriorityNum": 14,
                 "PriorityConfig": "config/prioplus-eurosys25/experiments/prioplus-multiprio-priority-config.json"
             },

@@ -8,6 +8,9 @@
 #include "ns3/tcp-header.h"
 #include "ns3/udp-header.h"
 
+#include <map>
+#include <vector>
+
 namespace ns3
 {
 

@@ -6,6 +6,9 @@
 #include "ns3/point-to-point-net-device.h"
 #include "ns3/traffic-control-layer.h"
 
+#include <set>
+#include <unordered_map>
+
 namespace ns3
 {
 
