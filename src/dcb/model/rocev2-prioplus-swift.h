@@ -239,11 +239,15 @@ class RoCEv2PrioplusSwift : public RoCEv2CongestionOps
     QueueSize m_tChannelWidthBytes;    //!< Thigh distance between adjacent priority channels
     QueueSize m_tChannelIntervalBytes; //!< Deprecated: old gap between next Thigh and Tlow
     double m_tChannelTargetWaterline;  //!< Relative Tlow position in the channel width
+    QueueSize m_tChannelShimBytes;     //!< Safety margin below this priority's Thigh
+    bool m_dynamicTarget;              //!< Use cwnd-based dynamic target or static Tlow
     uint32_t m_priorityNum;            //!< The number of priority in the network
     uint32_t m_priorityIndex;          //!< The index of the priority of this flow, lesser is higher
     void SetChannelWidth(StringValue width);
     void SetChannelInterval(StringValue interval);
+    void SetChannelShim(StringValue shim);
     void SetChannelThres();
+    Time GetTargetDelay();
     std::string m_priorityConfigFile; //!< The file to set the priority config
     void SetPriorityConfig();
 

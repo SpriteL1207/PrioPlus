@@ -24,6 +24,7 @@
 #include "ns3/global-value.h"
 #include "ns3/simulator.h"
 
+#include <algorithm>
 #include <boost/json.hpp>
 #include <cmath>
 #include <cstdint>
@@ -151,6 +152,16 @@ RoCEv2PrioplusSwift::GetTypeId()
                           DoubleValue(0.4),
                           MakeDoubleAccessor(&RoCEv2PrioplusSwift::m_tChannelTargetWaterline),
                           MakeDoubleChecker<double>(0.0, 1.0))
+            .AddAttribute("DynamicTarget",
+                          "Use a cwnd-based dynamic target instead of static Tlow",
+                          BooleanValue(false),
+                          MakeBooleanAccessor(&RoCEv2PrioplusSwift::m_dynamicTarget),
+                          MakeBooleanChecker())
+            .AddAttribute("ChannelShim",
+                          "The safety margin below this priority's Thigh when using DynamicTarget",
+                          StringValue("0KB"),
+                          MakeStringAccessor(&RoCEv2PrioplusSwift::SetChannelShim),
+                          MakeStringChecker())
             .AddAttribute("PriorityNum",
                           "The number of priority in the network",
                           UintegerValue(8),
@@ -399,7 +410,7 @@ RoCEv2PrioplusSwift::UpdateStateWithRcvACK(Ptr<Packet> ack,
             // there may occur division by zero
             concurrentFlowNumFromDelay =
                 ((double)(delay + m_rttCorrection).GetNanoSeconds() /
-                 ((double)(m_tLowThreshold + m_rttCorrection).GetNanoSeconds() *
+                 ((double)(GetTargetDelay() + m_rttCorrection).GetNanoSeconds() *
                   ((double)m_cwndBeforeTHigh / m_sockState->GetBaseBdp())));
 
             concurrentFlowNum = std::min((uint32_t)2000, (uint32_t)concurrentFlowNumFromDelay);
@@ -481,7 +492,7 @@ RoCEv2PrioplusSwift::DoRateUpdate(double refenceRate,
     // Update curRateRatio to make current rate approach the line rate
     // Mimic the control in swift
 
-    Time targetDelay = m_tLowThreshold;
+    Time targetDelay = GetTargetDelay();
 
     uint64_t totalPacketSize = m_sockState->GetPacketSize();
     if (delay < targetDelay)
@@ -520,11 +531,13 @@ RoCEv2PrioplusSwift::DoRateUpdate(double refenceRate,
         // for fast start
         if (shouldAi)
         {
+            Time baseDelay = m_rttBased ? m_sockState->GetBaseRtt()
+                                        : m_sockState->GetBaseOneWayDelay();
             [[maybe_unused]] uint32_t linearPart =
                 m_linearStartBytes * m_incastAvoidanceRate *
-                ((double)(m_tLowThreshold - delay).GetNanoSeconds() /
-                 (m_tLowThreshold - m_sockState->GetBaseOneWayDelay()).GetNanoSeconds());
-            [[maybe_unused]] uint32_t miPart = ((double)(m_tLowThreshold - delay).GetNanoSeconds() /
+                ((double)(targetDelay - delay).GetNanoSeconds() /
+                 (targetDelay - baseDelay).GetNanoSeconds());
+            [[maybe_unused]] uint32_t miPart = ((double)(targetDelay - delay).GetNanoSeconds() /
                                                 (delay + m_rttCorrection).GetNanoSeconds()) *
                                                curCwnd;
             // For ablation study, if m_tlowAiStep is set, use it to replace miPart
@@ -564,13 +577,16 @@ RoCEv2PrioplusSwift::SetCwnd(uint32_t cwnd)
         StopSendingAndStartProbe(m_sockState->GetBaseOneWayDelay() + m_rttCorrection);
         return;
     }
-    // cwnd must small than tlow in Bytes
-    uint32_t maxCwnd = m_tLowThresholdInBytes.GetValue() + m_sockState->GetBaseBdp();
-    m_sockState->SetCwnd(std::min(cwnd, maxCwnd));
+    // Dynamic target assumes each flow's cwnd stays inside [0, BaseBDP].
+    uint32_t maxCwnd = m_dynamicTarget ? m_sockState->GetBaseBdp()
+                                       : m_tLowThresholdInBytes.GetValue() +
+                                             m_sockState->GetBaseBdp();
+    uint32_t boundedCwnd = std::min(cwnd, maxCwnd);
+    m_sockState->SetCwnd(boundedCwnd);
     // Calculate the rate ratio based on the cwnd
     if (m_isPacing)
     {
-        double rateRatio = static_cast<double>(cwnd) / m_sockState->GetBaseBdp();
+        double rateRatio = static_cast<double>(boundedCwnd) / m_sockState->GetBaseBdp();
         m_sockState->SetRateRatioPercent(rateRatio);
     }
 }
@@ -632,10 +648,11 @@ void
 RoCEv2PrioplusSwift::ScheduleProbePacket(Time delay)
 {
     Time qDelay = delay;
-    // If qDelay is larger than m_tLowThreshold, minus m_tLowThreshold
-    if (qDelay > m_tLowThreshold)
+    Time targetDelay = GetTargetDelay();
+    // If qDelay is larger than target, subtract the target.
+    if (qDelay > targetDelay)
     {
-        qDelay -= m_tLowThreshold;
+        qDelay -= targetDelay;
     }
     else
     {
@@ -856,6 +873,41 @@ RoCEv2PrioplusSwift::SetChannelInterval(StringValue interval)
 }
 
 void
+RoCEv2PrioplusSwift::SetChannelShim(StringValue shim)
+{
+    m_tChannelShimBytes = QueueSize(shim.Get());
+}
+
+Time
+RoCEv2PrioplusSwift::GetTargetDelay()
+{
+    if (!m_dynamicTarget)
+    {
+        return m_tLowThreshold;
+    }
+
+    uint64_t channelWidth = m_tChannelWidthBytes.GetValue();
+    uint64_t channelShim = m_tChannelShimBytes.GetValue();
+    uint64_t baseBdp = m_sockState->GetBaseBdp();
+
+    NS_ABORT_MSG_IF(channelWidth == 0, "DynamicTarget requires ChannelWidthBytes");
+    NS_ABORT_MSG_IF(channelShim > channelWidth, "ChannelShim must be no larger than ChannelWidthBytes");
+    NS_ABORT_MSG_IF(m_tHighThresholdInBytes.GetValue() < channelWidth,
+                    "DynamicTarget cannot infer the next lower priority's Thigh");
+    NS_ABORT_MSG_IF(baseBdp == 0, "DynamicTarget requires a non-zero BaseBDP");
+
+    uint64_t thighSubPrio = m_tHighThresholdInBytes.GetValue() - channelWidth;
+    uint64_t dynamicRange = channelWidth - channelShim;
+    double cwndRatio = static_cast<double>(m_sockState->GetCwnd()) / baseBdp;
+    cwndRatio = std::max(0.0, std::min(1.0, cwndRatio));
+
+    uint64_t targetBytes =
+        thighSubPrio + static_cast<uint64_t>(std::llround((1.0 - cwndRatio) * dynamicRange));
+    Time baseDelay = m_rttBased ? m_sockState->GetBaseRtt() : m_sockState->GetBaseOneWayDelay();
+    return baseDelay + ConvertBytesToTime(QueueSize(BYTES, targetBytes));
+}
+
+void
 RoCEv2PrioplusSwift::SetChannelThres()
 {
     if (m_tChannelWidthBytes.GetValue() == 0 && m_tChannelIntervalBytes.GetValue() == 0)
@@ -873,6 +925,7 @@ RoCEv2PrioplusSwift::SetChannelThres()
         m_tChannelTargetWaterline =
             static_cast<double>(legacyNextThighToTargetWidth) / channelWidth;
     }
+    m_tChannelWidthBytes = QueueSize(BYTES, channelWidth);
 
     // ChannelWidthBytes is the Thigh distance between adjacent priorities. Tlow is placed at
     // ChannelTargetWaterline of that distance above the next lower priority's Thigh.
