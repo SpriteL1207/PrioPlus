@@ -125,9 +125,11 @@ class RoCEv2PrioplusSwift : public RoCEv2CongestionOps
         std::vector<PrioplusSwiftCompleteStats>
             vPrioplusCompleteStats; //!< The complete statistics of the
                                     //!< Prioplus complete event
+        std::vector<std::pair<Time, Time>> vTargetDelay; //!< Record the target delay
 
         // To avoid copy, use rvalue reference
         void RecordCompleteStats(PrioplusSwiftCompleteStats&& stats);
+        void RecordTargetDelay(Time delay);
 
         // Collect the statistics and check if the statistics is correct
         void CollectAndCheck();

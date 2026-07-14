@@ -883,6 +883,7 @@ RoCEv2PrioplusSwift::GetTargetDelay()
 {
     if (!m_dynamicTarget)
     {
+        m_stats->RecordTargetDelay(m_tLowThreshold);
         return m_tLowThreshold;
     }
 
@@ -904,7 +905,9 @@ RoCEv2PrioplusSwift::GetTargetDelay()
     uint64_t targetBytes =
         thighSubPrio + static_cast<uint64_t>(std::llround((1.0 - cwndRatio) * dynamicRange));
     Time baseDelay = m_rttBased ? m_sockState->GetBaseRtt() : m_sockState->GetBaseOneWayDelay();
-    return baseDelay + ConvertBytesToTime(QueueSize(BYTES, targetBytes));
+    Time targetDelay = baseDelay + ConvertBytesToTime(QueueSize(BYTES, targetBytes));
+    m_stats->RecordTargetDelay(targetDelay);
+    return targetDelay;
 }
 
 void
@@ -1019,6 +1022,15 @@ RoCEv2PrioplusSwift::Stats::RecordCompleteStats(
     if (bDetailedSenderStats)
     {
         vPrioplusCompleteStats.push_back(stats);
+    }
+}
+
+void
+RoCEv2PrioplusSwift::Stats::RecordTargetDelay(Time delay)
+{
+    if (bDetailedSenderStats)
+    {
+        vTargetDelay.push_back(std::make_pair(Simulator::Now(), delay));
     }
 }
 

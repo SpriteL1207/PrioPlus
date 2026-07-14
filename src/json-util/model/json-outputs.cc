@@ -359,6 +359,7 @@ ConstructSenderFlowStats(ApplicationContainer& apps, FlowStatsObjMap& mFlowStats
                     else if (prioplusSwiftCcStats != nullptr)
                     {
                         boost::json::array completeStatsArray;
+                        boost::json::array targetDelayArray;
 
                         for (RoCEv2PrioplusSwift::Stats::PrioplusSwiftCompleteStats& completeStats :
                              prioplusSwiftCcStats->vPrioplusCompleteStats)
@@ -372,8 +373,15 @@ ConstructSenderFlowStats(ApplicationContainer& apps, FlowStatsObjMap& mFlowStats
                                 {"miPart", completeStats.miPart},
                                 {"mdPart", completeStats.mdPart}});
                         }
+                        for (auto& [time, targetDelay] : prioplusSwiftCcStats->vTargetDelay)
+                        {
+                            targetDelayArray.emplace_back(boost::json::object{
+                                {"timeNs", time.GetNanoSeconds()},
+                                {"targetDelayNs", targetDelay.GetNanoSeconds()}});
+                        }
 
                         ccStatsObj["completeStats"] = completeStatsArray;
+                        ccStatsObj["targetDelay"] = targetDelayArray;
                     }
                     else if (hpccCcStats != nullptr)
                     {
