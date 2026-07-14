@@ -9,7 +9,6 @@ import matplotlib.pyplot as plt
 
 
 RATE_WINDOW_NS = 100_000
-LINK_RATE_BPS = 100e9
 
 
 def to_ms(time_ns, origin_ns):
@@ -75,32 +74,12 @@ def queue_series(data, origin_ns):
     return xs, ys
 
 
-def target_delay_to_kb(target_delay_ns, base_delay_ns):
-    queue_delay_ns = max(0.0, target_delay_ns - base_delay_ns)
-    return queue_delay_ns * 1e-9 * LINK_RATE_BPS / 8 / 1024
-
-
-def infer_base_delay_ns(data):
-    links = data.get("config", {}).get("topologyConfig", {}).get("linkConfig", [])
-    if not links:
-        return 0.0
-    delay = links[0].get("delay", "0us")
-    if delay.endswith("us"):
-        return float(delay[:-2]) * 1000
-    if delay.endswith("ns"):
-        return float(delay[:-2])
-    if delay.endswith("ms"):
-        return float(delay[:-2]) * 1_000_000
-    return 0.0
-
-
 def plot_one(json_path, out_dir):
     with open(json_path) as f:
         data = json.load(f)
 
     flows = data["flowStatistics"]
     origin_ns = min(flow["sentPkt"][0]["timeNs"] for flow in flows if flow.get("sentPkt"))
-    base_delay_ns = infer_base_delay_ns(data)
 
     fig, axes = plt.subplots(5, 1, figsize=(7.2, 9.2), sharex=True)
     colors = plt.cm.tab10.colors
@@ -120,7 +99,7 @@ def plot_one(json_path, out_dir):
 
         target = flow.get("ccStats", {}).get("targetDelay", [])
         xs = [to_ms(p["timeNs"], origin_ns) for p in target]
-        ys = [target_delay_to_kb(p["targetDelayNs"], base_delay_ns) for p in target]
+        ys = [p["targetDelayNs"] / 1000 for p in target]
         axes[4].plot(xs, ys, label=label, color=color, linewidth=1.0)
 
     xs, ys = queue_series(data, origin_ns)
@@ -130,7 +109,7 @@ def plot_one(json_path, out_dir):
     axes[1].set_ylabel("Queue\n(KB)")
     axes[2].set_ylabel("Delay\n(us)")
     axes[3].set_ylabel("Cwnd\n(KB)")
-    axes[4].set_ylabel("Target\n(KB)")
+    axes[4].set_ylabel("Target\n(us)")
     axes[4].set_xlabel("Time (ms)")
 
     for ax in axes:
