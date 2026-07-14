@@ -51,8 +51,14 @@ def cc_series(flow, name, value_key, origin_ns, scale=1.0):
 
 def cwnd_series(flow, origin_ns):
     series = flow.get("ccCwnd", [])
-    xs = [to_ms(p["timeNs"], origin_ns) for p in series]
-    ys = [p["cwndByte"] / 1024 for p in series]
+    if series:
+        xs = [to_ms(p["timeNs"], origin_ns) for p in series]
+        ys = [p["cwndByte"] / 1024 for p in series]
+        return xs, ys
+
+    series = flow.get("ccStats", {}).get("completeStats", [])
+    xs = [to_ms(p["timeNs"], origin_ns) for p in series if "cwnd" in p]
+    ys = [p["cwnd"] / 1024 for p in series if "cwnd" in p]
     return xs, ys
 
 
