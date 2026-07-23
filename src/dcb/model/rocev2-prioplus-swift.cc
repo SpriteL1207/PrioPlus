@@ -152,6 +152,11 @@ RoCEv2PrioplusSwift::GetTypeId()
                           DoubleValue(0.4),
                           MakeDoubleAccessor(&RoCEv2PrioplusSwift::m_tChannelTargetWaterline),
                           MakeDoubleChecker<double>(0.0, 1.0))
+            .AddAttribute("ChannelLowBytes",
+                          "The explicit lower bound of this priority channel in Bytes",
+                          StringValue("0KB"),
+                          MakeStringAccessor(&RoCEv2PrioplusSwift::SetChannelLow),
+                          MakeStringChecker())
             .AddAttribute("DynamicTarget",
                           "Use a cwnd-based dynamic target instead of static Tlow",
                           BooleanValue(false),
@@ -873,6 +878,12 @@ RoCEv2PrioplusSwift::SetChannelInterval(StringValue interval)
 }
 
 void
+RoCEv2PrioplusSwift::SetChannelLow(StringValue low)
+{
+    m_tChannelLowBytes = QueueSize(low.Get());
+}
+
+void
 RoCEv2PrioplusSwift::SetChannelShim(StringValue shim)
 {
     m_tChannelShimBytes = QueueSize(shim.Get());
@@ -893,17 +904,21 @@ RoCEv2PrioplusSwift::GetTargetDelay()
 
     NS_ABORT_MSG_IF(channelWidth == 0, "DynamicTarget requires ChannelWidthBytes");
     NS_ABORT_MSG_IF(channelShim > channelWidth, "ChannelShim must be no larger than ChannelWidthBytes");
-    NS_ABORT_MSG_IF(m_tHighThresholdInBytes.GetValue() < channelWidth,
-                    "DynamicTarget cannot infer the next lower priority's Thigh");
     NS_ABORT_MSG_IF(baseBdp == 0, "DynamicTarget requires a non-zero BaseBDP");
 
-    uint64_t thighSubPrio = m_tHighThresholdInBytes.GetValue() - channelWidth;
+    uint64_t channelLow = m_tChannelLowBytes.GetValue();
+    if (channelLow == 0)
+    {
+        NS_ABORT_MSG_IF(m_tHighThresholdInBytes.GetValue() < channelWidth,
+                        "DynamicTarget cannot infer the channel lower bound");
+        channelLow = m_tHighThresholdInBytes.GetValue() - channelWidth;
+    }
     uint64_t dynamicRange = channelWidth - channelShim;
     double cwndRatio = static_cast<double>(m_sockState->GetCwnd()) / baseBdp;
     cwndRatio = std::max(0.0, std::min(1.0, cwndRatio));
 
     uint64_t targetBytes =
-        thighSubPrio + static_cast<uint64_t>(std::llround((1.0 - cwndRatio) * dynamicRange));
+        channelLow + static_cast<uint64_t>(std::llround((1.0 - cwndRatio) * dynamicRange));
     Time baseDelay = m_rttBased ? m_sockState->GetBaseRtt() : m_sockState->GetBaseOneWayDelay();
     Time targetDelay = baseDelay + ConvertBytesToTime(QueueSize(BYTES, targetBytes));
     m_stats->RecordTargetDelay(targetDelay);
@@ -929,6 +944,16 @@ RoCEv2PrioplusSwift::SetChannelThres()
             static_cast<double>(legacyNextThighToTargetWidth) / channelWidth;
     }
     m_tChannelWidthBytes = QueueSize(BYTES, channelWidth);
+
+    if (m_tChannelLowBytes.GetValue() != 0)
+    {
+        uint64_t channelLow = m_tChannelLowBytes.GetValue();
+        uint64_t targetOffset =
+            static_cast<uint64_t>(std::llround(channelWidth * m_tChannelTargetWaterline));
+        m_tLowThresholdInBytes = QueueSize(BYTES, channelLow + targetOffset);
+        m_tHighThresholdInBytes = QueueSize(BYTES, channelLow + channelWidth);
+        return;
+    }
 
     // ChannelWidthBytes is the Thigh distance between adjacent priorities. Tlow is placed at
     // ChannelTargetWaterline of that distance above the next lower priority's Thigh.
